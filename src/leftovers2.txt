@@ -1,0 +1,41 @@
+type Trace =
+    -- управляет количеством шагов
+    | Step -- задержаться в текущем состоянии
+    | Seq { child: Trace[] } -- конкатенация трейсов
+    -- где мы находимся в 1 колонке
+    | Pos { from: number, to: number; child: Trace }
+    | Dig { child: Trace } -- углубление по стеку
+    -- где мы находимся в 2 колонке
+    | Consume { pos: number } -- куда сдвинулись после child
+    | Rollback { pos: number } -- куда вернулись после неудачи
+    -- где мы находимся в 3 колонке
+    | ResultString { value: string, child: Trace } -- какое значение посчиталось после child
+    | ResultField { field: string, child: Trace } -- в какое поле положили результат
+    | ResultArray { children: Trace } -- из детей соберут массив
+    | ResultObject { name: string, children: Trace } -- из детей соберут объект
+
+интерпретировать t в конечное значение, чтобы убедиться, что ничего не потерялось
+какие ветви остаются? seq -> seq/sel/array?
+
+test : foo bar;
+foo = foo:"a"; // {type: "foo", foo: ...}
+bar = bar:"b"; // {type: "bar", bar: ...}
+               // {type: "bar", bar: "bar"}
+
+const Comp = (children) => {
+    useImperative
+    const Seq = useRef(function* () {
+        ...
+        yield child.Comp;
+        ...
+    });
+    return <Seq />;
+};
+
+трейс строки:
+    получилось
+    не получилось
+
+трейс мейби
+    попробовали, получилось
+    попробовали, не получилось, но ничего страшного

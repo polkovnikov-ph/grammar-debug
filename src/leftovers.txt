@@ -1,0 +1,231 @@
+const {steps, result} = collect(debug2(compileTop(debugger2)(ast))['grammar'](code));
+// const stack = [];
+let currTextPos = 0;
+const srcLocsPerTextPos = new Array(code.length).fill(null);
+const srcPosRangeStack = [];
+let srcPosCurrRange: Range = {from: 0, to: 0};
+const rangeStackJsonToRangeStackId = new Map();
+let nextRangeStackId = 0;
+const rangeIdToRangeStack: Range[][] = [];
+for (const s of steps) {
+    if (s.type === 'in') {
+        srcPosRangeStack.push(srcPosCurrRange);
+        stack.push(s.name);
+    } else if (s.type === 'out') {
+        srcPosRangeStack.pop();
+        stack.pop();
+    } else if (s.type === 'move') {
+        if (s.pos > currTextPos) {
+            const rangeStack = [...srcPosRangeStack, srcPosCurrRange];
+            const json = JSON.stringify(rangeStack);
+            const enc = rangeStackJsonToRangeStackId.has(json) ? rangeStackJsonToRangeStackId.get(json) : (() => {
+                const newId = nextRangeStackId++;
+                rangeStackJsonToRangeStackId.set(json, newId);
+                rangeIdToRangeStack.push(rangeStack);
+                return newId;
+            })();
+            for (let i = currTextPos; i < s.pos; ++i) {
+                srcLocsPerTextPos[i] = enc;
+            }
+        } else if (s.pos < currTextPos) {
+            for (let i = s.pos; i < currTextPos; ++i) {
+                srcLocsPerTextPos[i] = null;
+            }
+        }
+        currTextPos = s.pos;
+    } else if (s.type === 'pos') {
+        const {from, to} = s;
+        srcPosCurrRange = {from, to};
+    }
+}
+const index = ({from, to}: Range) => `${from},${to}`;
+const encWhere: RangeP[] = [];
+const groups: RangeP[] = [...new Map(
+    flatten(rangeIdToRangeStack).map((r, i) => [index(r), r])
+).values()]
+    .sort((a, b) => a.from - b.from)
+    .map((x, i) => ({...x,  props: {
+        onMouseEnter: () => handleLeftOver(i),
+        onMouseLeave: () => handleLeftOver(null),
+    }}));
+const inverted1: Record<string, Range[]> = Object.fromEntries(groups.map((r) => (
+    [index(r), []]
+)));
+let prev = srcLocsPerTextPos.shift(), from = 0;
+for (const [j, c] of srcLocsPerTextPos.entries()) {
+    const i = j + 1;
+    if (c === prev) {
+        continue;
+    }
+    const p = prev;
+    encWhere.push({from, to: i, props: {
+        onMouseEnter: () => handleRightOver(p),
+        onMouseLeave: () => handleRightOver(null),
+    }});
+    rangeIdToRangeStack[prev].map(r => {
+        inverted1[index(r)].push({from, to: i});
+    })
+    prev = c;
+    from = i;
+}
+const inverted = groups.map((r) => inverted1[index(r)]);
+
+interface Range {
+    from: number;
+    to: number;
+}
+interface RangeP extends Range {
+    props: React.DetailedHTMLProps<React.HTMLAttributes<HTMLPreElement>, HTMLPreElement>;
+}
+interface RangesProps {
+    text: string;
+    ranges: RangeP[],
+    isDry?: boolean;
+}
+export const Ranges: FC<RangesProps> = ({ranges, text, isDry = false}) => {
+    const sorted = [...ranges].sort((a, b) => a.from - b.from);
+    let prev = 0, result: (ReactElement | string)[] = [];
+    const t = isDry ? text.replace(/[^\n]/g, ' ') : text;
+    for (const {from, to, props} of sorted) {
+        result.push(t.substring(prev, from));
+        result.push(<span key={from} {...props}>{t.substring(from, to)}</span>);
+        prev = to;
+    }
+    result.push(t.substr(prev));
+    return <>{result}</>;
+};
+
+
+
+    // useEffect(() => {
+    //     const grammarRanges: monaco.Range[] = [new monaco.Range(1, 1, 1, 1)];
+    //     let prevGrammarDecor: string[] = [];
+    //     const redrawRanges = () => {
+    //         const editor = grammarEditorRef.current;
+    //         if (!editor) return;
+    //         console.log(prevGrammarDecor, grammarRanges);
+    //         prevGrammarDecor = editor.deltaDecorations(prevGrammarDecor, grammarRanges.map((range, i) => ({
+    //             range,
+    //             options: {
+    //                 inlineClassName: i === grammarRanges.length - 1 ? 'selection' : 'selection-weak',
+    //             },
+    //         })));
+    //     };
+    //     let prevTextDecor: string[] = [];
+    //     return combine(
+    //         posEmitter.on('ruleIn', () => {
+    //             grammarRanges.push(grammarRanges[grammarRanges.length - 1]);
+    //             redrawRanges();
+    //         }),
+    //         posEmitter.on('ruleOut', () => {
+    //             grammarRanges.pop();
+    //             redrawRanges();
+    //         }),
+    //         posEmitter.on('srcpos', (from, to) => {
+    //             const editor = grammarEditorRef.current;
+    //             if (!editor || !monaco) return;
+    //             const model = editor.getModel();
+    //             if (!model) return;
+    //             const {lineNumber: lineNumberFrom, column: columnFrom} = model.getPositionAt(from);
+    //             const {lineNumber: lineNumberTo, column: columnTo} = model.getPositionAt(
+    //                 grammar.substring(from, to).trim().length + from,
+    //             );
+    //             grammarRanges[grammarRanges.length - 1] = new monaco.Range(lineNumberFrom, columnFrom, lineNumberTo, columnTo);
+    //             redrawRanges();
+    //         }),
+    //         posEmitter.on('txtpos', (pos) => {
+    //             const editor = textEditorRef.current;
+    //             if (!editor || !monaco) return;
+    //             const model = editor.getModel();
+    //             if (!model) return;
+    //             const {lineNumber: lineNumberTo, column: columnTo} = model.getPositionAt(pos);
+    //             prevTextDecor = editor.deltaDecorations(prevTextDecor, [{
+    //                 range: new monaco.Range(1, 1, lineNumberTo, columnTo),
+    //                 options: {
+    //                     inlineClassName: 'selection',
+    //                 },
+    //             }]);
+    //         }),
+    //     );
+    // }, [posEmitter]);
+
+    // const [rightOverlay, setRightOverlay] = useState<RangeP[]>([]);
+    // const [leftOverlay, setLeftOverlay] = useState<RangeP[]>([]);
+    // const handleLeftOver = useCallback((id: number | null) => {
+    //     if (isDebugging) return;
+    //     setRightOverlay(id === null ? [] :
+    //         inverted[id].reverse()
+    //             .map((r, i) => ({...r, props: {style: {background: '#a0ffb0'}}})),
+    //     );
+    // }, []);
+    // const handleRightOver = useCallback((id: number | null) => {
+    //     if (isDebugging) return;
+    //     setLeftOverlay(id === null ? [] :
+    //         rangeIdToRangeStack[id].reverse()
+    //             .map((r, i) => ({...r, props: {style: {background: `rgb(255, 240, ${i === 0 ? 0 : 180})`}}})),
+    //     );
+    // }, []);
+
+    // const [isDebugging, setIsDebugging] = useState(false);
+    // const [path, setPath] = useState<string>('');
+    // const stop = useRef<null | (() => void)>(null);
+    // const next = () => new Promise<void>((resolve, reject) => {
+    //     stop.current = () => reject(new Error('Stopped'));
+    //     setTimeout(resolve, 0);
+    // });
+    // const handleDebug = useCallback(() => {
+    //     if (isDebugging) {
+    //         stop.current && stop.current();
+    //     } else {
+    //         debug();
+    //     }
+    // }, [isDebugging]);
+    // const debug = async () => {
+    //     setIsDebugging(true);
+    //     const stack = [];
+    //     const rangeStack: Range[] = [];
+    //     let currRange: Range = {from: 0, to: 0};
+    //     try {
+    //         for (const s of steps) {
+    //             if (s.type === 'pos') {
+    //                 const {from, to} = s;
+    //                 currRange = {from, to};
+    //                 setLeftOverlay([
+    //                     ...rangeStack.map(range => ({
+    //                         ...range,
+    //                         props: {style: {background: 'rgba(255, 240, 180)'}},
+    //                     })),
+    //                     {
+    //                         ...currRange,
+    //                         props: {style: {background: 'rgba(255, 240, 0)'}},
+    //                     },
+    //                 ]);
+    //                 await next();
+    //             } else if (s.type === 'move') {
+    //                 const {pos} = s;
+    //                 setRightOverlay([{
+    //                     from: 0,
+    //                     to: pos,
+    //                     props: {style: {background: '#a0ffb0'}},
+    //                 }]);
+    //             } else if (s.type === 'in' || s.type === 'out') {
+    //                 if (s.type === 'in') {
+    //                     rangeStack.push(currRange);
+    //                     stack.push(s.name);
+    //                 } else {
+    //                     rangeStack.pop();
+    //                     stack.pop();
+    //                 }
+    //                 setPath(stack.join(' > '));
+    //             }
+    //         }
+    //     } catch (e) {
+    //         console.error(e);
+    //     }
+    //     unstable_batchedUpdates(() => {
+    //         setLeftOverlay([]);
+    //         setRightOverlay([]);
+    //         setPath('');
+    //         setIsDebugging(false);
+    //     });
+    // };
